@@ -430,6 +430,12 @@ class PixivBrowser(mechanize.Browser):
                 del parsed
                 raise PixivException("Failed FANBOX Cloudflare CAPTCHA challenge, please check your cookie and user-agent settings.", 
                                              errorCode=PixivException.CANNOT_LOGIN, htmlPage=fanboxErrorPage)
+            else:
+                fanboxErrorPage = parsed.decode('utf-8')
+                parsed.decompose()
+                del parsed
+                raise PixivException("An unknown FANBOX error occured - Cannot login.", 
+                                             errorCode=PixivException.CANNOT_LOGIN, htmlPage=fanboxErrorPage)                
             parsed.decompose()
             del parsed
 
