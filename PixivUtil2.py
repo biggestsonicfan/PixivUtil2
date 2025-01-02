@@ -1557,8 +1557,8 @@ def doLogin(password, username):
         if len(__config__.cookie) > 0:
             result = __br__.loginUsingCookie()
 
-        # if not result:
-        #     result = __br__.login(username, password)
+        if not result:
+            result = __br__.login(username, password)
 
     except BaseException:
         PixivHelper.print_and_log('error', f'Error at doLogin(): {sys.exc_info()}')

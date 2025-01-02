@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # pylint: disable=W0603, C0325
 
+import base64
 import http.client
 import http.cookiejar
 import json
@@ -12,6 +13,7 @@ import traceback
 import urllib
 from typing import List, Tuple, Union
 
+import cloudscraper
 import demjson3
 import mechanize
 import socks
@@ -23,6 +25,7 @@ from PixivArtist import PixivArtist
 from PixivBookmark import PixivNewIllustBookmark
 from PixivException import PixivException
 from PixivImage import PixivImage, PixivMangaSeries
+from PixivLoginHelper import PixivLogin
 from PixivModelFanbox import FanboxArtist, FanboxPost
 from PixivModelSketch import SketchArtist, SketchPost
 from PixivNovel import MAX_LIMIT, NovelSeries, PixivNovel
@@ -500,31 +503,46 @@ class PixivBrowser(mechanize.Browser):
         parsed = None
         try:
             PixivHelper.print_and_log('info', 'Logging in...')
-            url = "https://accounts.pixiv.net/login"
+            url = "https://accounts.pixiv.net/"
             # get the post key
-            res = self.open_with_retry(url)
+            #res = self.open_with_retry(url)
+            login_helper = PixivLogin()
+            #login_helper.set_user_agent(self._config.useragent)
+            res = login_helper.open_with_retry(url)
             parsed = BeautifulSoup(res, features="html5lib")
-            post_key = parsed.find('input', attrs={'name': 'post_key'})
+            with open("login_page.html", "w", encoding="utf-8") as file:
+                file.write(parsed.prettify())
+            #post_key = parsed.find('input', attrs={'name': 'post_key'})
+            login_data = parsed.find('div', {'data-page-name': 'LoginPage'})
             # js_init_config = self._getInitConfig(parsed)
-            res.close()
+            # res.close()
+            if login_data: 
+                data_props = login_data.get('data-props')
+                if data_props:
+                    parsed_data = json.loads(data_props)
+                    data = {}
+                    data['pixiv_id'] = username
+                    data['password'] = password
+                    # data['captcha'] = ''
+                    # data['g_recaptcha_response'] = ''
+                    data['return_to'] = data_props['returnTo']
+                    data['lang'] = 'en'
+                    data['source'] = data_props['source']
+                    data['ref'] = data_props['ref']
 
-            data = {}
-            data['pixiv_id'] = username
-            data['password'] = password
-            # data['captcha'] = ''
-            # data['g_recaptcha_response'] = ''
-            data['return_to'] = 'https://www.pixiv.net'
-            data['lang'] = 'en'
-            data['post_key'] = post_key['value']
-            data['source'] = "accounts"
-            data['ref'] = ''
+                    captcha_data = {}
+                    captcha_data['a'] = '1'
+                    captcha_data['k'] = data_props['recaptchaEnterpriseCheckboxSiteKey']
+                    captcha_data['co'] = base64.b64encode('https://accounts.pixiv.net:443'.encode('utf-8'))
+                    captcha_data['hl'] = 'en'
 
-            request = mechanize.Request("https://accounts.pixiv.net/api/login?lang=en", data, method='POST')
-            response = self.open_with_retry(request)
 
-            result = self.processLoginResult(response, username, password)
-            response.close()
-            return result
+                    request = mechanize.Request("https://accounts.pixiv.net/api/login?lang=en", data, method='POST')
+                    response = self.open_with_retry(request)
+
+                    result = self.processLoginResult(response, username, password)
+                    response.close()
+                    return result
         except BaseException:
             traceback.print_exc()
             PixivHelper.print_and_log('error', f'Error at login(): {sys.exc_info()}')
