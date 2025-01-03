@@ -1,10 +1,15 @@
+import json
+import re
+import subprocess
 import sys
 from time import sleep
 import time
 import traceback
+from urllib.parse import parse_qs, urlparse
 
-from cloudscraper import CloudScraper
+from cloudscraper import CloudScraper, interpreters
 import requests
+from requests_html import HTMLSession
 from bs4 import BeautifulSoup
 
 import PixivHelper
@@ -23,9 +28,7 @@ class PixivLogin(CloudScraper):
                     "desktop": True,
                     "mobile": False
                 },
-            # JavaScript Engine
-            interpreter="nodejs",
-            debug=True
+            captcha={'provider': 'return_response'}
             )
     def _configureBrowser(self, config):
         if config is None:
@@ -63,10 +66,12 @@ class PixivLogin(CloudScraper):
             raise PixivException(f"Unsupported HTTP method: {method} - Something is wrong in the code.",
                         errorCode=PixivException.OTHER_ERROR)
         
-        time.sleep(10)
-        return html.text
-            
-
+        if html.status_code == 200:
+            return html.text
+        else:
+            PixivHelper.print_and_log('error', f'Unexpected status code: {html.status_code}')
+            raise PixivException(f'Unexpected status code: {html.status_code} - Cannot login to Pixiv',
+                        errorCode=PixivException.OTHER_ERROR)
     
     def open_with_retry(self, url, data=None, timeout=60, retry=0, method="GET"):
         ''' Return response object with retry.'''
@@ -107,6 +112,74 @@ class PixivLogin(CloudScraper):
                     PixivHelper.print_and_log('error', f'Error at open_with_retry(): {sys.exc_info()}')
                     raise PixivException(f"Failed to get page: {temp}, please check your internet connection/firewall/antivirus.",
                                          errorCode=PixivException.SERVER_ERROR)
+                      
+    def render_with_nodejs(self, html):
+        data = json.dumps({
+            "headers": self.headers,
+            "html": html
+        }).encode()
+
+        result = subprocess.Popen(
+            ["node", "render_page.js"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE
+        )
+        rendered_html = result.communicate(input=data)[0]
+        return rendered_html.decode()
+
+    def render_with_requests_html(self, url):
+        session = HTMLSession()
+        session.headers = self.headers
+        session.cookies = self.cookies
+        response = session.get(url)
+        #response.html.render()
+        for _ in range(10):
+            if response.html.search('name="g-recaptcha-response" value="{}"') is None:
+                response.html.render()
+        g_recaptcha_response = response.html.search('name="g-recaptcha-response" value="{}"')[0]
+        return g_recaptcha_response
+
+
+
+    def handle_anchor(self, anchor_url, key):
+        url_var = parse_qs(urlparse(anchor_url).query)
+
+        self.headers.update({
+            "Content-Type": "application/x-protobuffer",
+            "Origin": "https://www.recaptcha.net",
+            "Host": "www.recaptcha.net",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "DNT": "1",
+            "Sec-GPC": "1",
+            "Connection": "keep-alive",
+            "Referer": "https://accounts.pixiv.net/",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "iframe",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "cross-site"
+        })
+
+        anchor_response = self.get(anchor_url, timeout=60 ,headers=self.headers)
+        anchor_parsed = BeautifulSoup(anchor_response.text, features="html5lib") 
+        with open("anchor_parsed.html", "w", encoding="utf-8") as file:
+            file.write(anchor_parsed.prettify())
+        anchor_token = re.search(r'type="hidden" id="recaptcha-token" value="([^"]+)"', anchor_response.text).group(1)
+
+        value1 = url_var['v'][0]
+        value2 = url_var['k'][0]
+        value3 = url_var['co'][0]
+
+        data = f"v={value1}&reason=q&c={anchor_token}&k={value2}&co={value3}&hl=en&size=invisible"
+        print(data)
+
+        self.headers.update({
+            "Referer": anchor_response.url,
+            "Content-Type": "application/x-www-form-urlencoded"
+        })
+        r = self.post(f"https://www.recaptcha.net/recaptcha/enterprise/reload?k={value2}", data=data, timeout=60, headers=self.headers)
+        return r.text.split('["rresp","')[1].split('"')[0]
 
     def login(self, username, password):
         parsed = None

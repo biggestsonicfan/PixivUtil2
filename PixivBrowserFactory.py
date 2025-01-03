@@ -503,46 +503,81 @@ class PixivBrowser(mechanize.Browser):
         parsed = None
         try:
             PixivHelper.print_and_log('info', 'Logging in...')
-            url = "https://accounts.pixiv.net/"
+            url = "https://accounts.pixiv.net"
             # get the post key
             #res = self.open_with_retry(url)
             login_helper = PixivLogin()
             #login_helper.set_user_agent(self._config.useragent)
+
+            prelogin_page = login_helper.render_with_requests_html(url)
+
             res = login_helper.open_with_retry(url)
-            parsed = BeautifulSoup(res, features="html5lib")
-            with open("login_page.html", "w", encoding="utf-8") as file:
-                file.write(parsed.prettify())
+            rendered_res = login_helper.render_with_nodejs(res)
+            #login_parsed = BeautifulSoup(res["login-data"], features="html5lib")
+            captcha_parsed = BeautifulSoup(rendered_res, features="html5lib")
+
+            #with open("login_page.html", "w", encoding="utf-8") as file:
+            #    file.write(login_parsed.prettify())
+
             #post_key = parsed.find('input', attrs={'name': 'post_key'})
-            login_data = parsed.find('div', {'data-page-name': 'LoginPage'})
-            # js_init_config = self._getInitConfig(parsed)
-            # res.close()
-            if login_data: 
-                data_props = login_data.get('data-props')
-                if data_props:
-                    parsed_data = json.loads(data_props)
-                    data = {}
-                    data['pixiv_id'] = username
-                    data['password'] = password
-                    # data['captcha'] = ''
-                    # data['g_recaptcha_response'] = ''
-                    data['return_to'] = data_props['returnTo']
-                    data['lang'] = 'en'
-                    data['source'] = data_props['source']
-                    data['ref'] = data_props['ref']
+            captcha_data = captcha_parsed.find('iframe', {'title': 'reCAPTCHA'})
+            if captcha_data:
+                anchor_url = captcha_data.get('src')
+                prelogin_page = login_helper.render_with_nodejs(captcha_parsed.prettify())
+                g_captcha_response = None
+                while g_captcha_response is None:
+                    #prelogin_page = login_helper.render_with_nodejs(rendered_res)
 
-                    captcha_data = {}
-                    captcha_data['a'] = '1'
-                    captcha_data['k'] = data_props['recaptchaEnterpriseCheckboxSiteKey']
-                    captcha_data['co'] = base64.b64encode('https://accounts.pixiv.net:443'.encode('utf-8'))
-                    captcha_data['hl'] = 'en'
+                    prelogin_parsed = BeautifulSoup(prelogin_page, features="html5lib")   
+                    with open("prelogin_page.html", "w", encoding="utf-8") as file:
+                        file.write(prelogin_parsed.prettify())
 
+                    prelogin_recaptcha_data = prelogin_parsed.find_all('textarea', {'name': 'g-recaptcha-response'})
+                    for data in prelogin_recaptcha_data:
+                        if data.get('value') != None:
+                            g_captcha_response = data.get('value')
 
-                    request = mechanize.Request("https://accounts.pixiv.net/api/login?lang=en", data, method='POST')
-                    response = self.open_with_retry(request)
+                prelogin_data = prelogin_parsed.find('div', {'data-page-name': 'IndexPage'})
+                predata_props = prelogin_data.get('data-props')
+                prelogin_json = prelogin_parsed.find('input', {'class': 'json-data'})
+                json_data = prelogin_json.get('value')
+                if predata_props and json_data:
+                    predata = json.loads(predata_props)
+                    login_url = f"{url}{predata['loginUrl']}";
+                    prejson = json.loads(json_data)
+                    login_key = prejson["pixivAccount.recaptchaEnterpriseScoreSiteKey"]
+                    recapcha_data = login_helper.handle_anchor(anchor_url, login_key)
 
-                    result = self.processLoginResult(response, username, password)
-                    response.close()
-                    return result
+                    
+                    login_get = login_helper.open_with_retry(login_url)
+                    login_get_parsed = BeautifulSoup(login_get, features="html5lib") 
+                    with open("login_get_page.html", "w", encoding="utf-8") as file:
+                        file.write(login_get_parsed.prettify())
+                    login_payload = {}
+                    login_payload['pixiv_id'] = username
+                    login_payload['password'] = password
+                    prejson
+
+                    recapcha_data = login_helper.handle_anchor(anchor_url)
+                # data_props = login_data.get('data-props')
+                # if data_props:
+                #     parsed_data = json.loads(data_props)
+                #     data = {}
+                #     data['pixiv_id'] = username
+                #     data['password'] = password
+                #     # data['captcha'] = ''
+                #     # data['g_recaptcha_response'] = ''
+                #     data['return_to'] = data_props['returnTo']
+                #     data['lang'] = 'en'
+                #     data['source'] = data_props['source']
+                #     data['ref'] = data_props['ref']
+
+                request = mechanize.Request("https://accounts.pixiv.net/api/login?lang=en", data, method='POST')
+                response = self.open_with_retry(request)
+
+                result = self.processLoginResult(response, username, password)
+                response.close()
+                return result
         except BaseException:
             traceback.print_exc()
             PixivHelper.print_and_log('error', f'Error at login(): {sys.exc_info()}')
